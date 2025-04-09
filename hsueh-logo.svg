@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100" width="200" height="100">
+  <defs>
+    <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#4CAF50"/>
+      <stop offset="100%" stop-color="#2196F3"/>
+    </linearGradient>
+    <mask id="shimmer-mask">
+      <rect width="100%" height="100%" fill="url(#gradient)"/>
+      <rect x="-20%" y="0" width="20%" height="100%" fill="white">
+        <animate attributeName="x" from="-20%" to="120%" dur="2s" repeatCount="indefinite"/>
+      </rect>
+    </mask>
+  </defs>
+  <rect width="100%" height="100%" fill="url(#gradient)" mask="url(#shimmer-mask)"/>
+  <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-size="24" fill="white" font-weight="bold">HSUEH</text>
+</svg>
