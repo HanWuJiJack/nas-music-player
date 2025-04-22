@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { FiServer, FiLock, FiUser, FiHash, FiX } from 'react-icons/fi'
 
 function uuid() {
   var s = [];
@@ -27,7 +28,6 @@ export default function ServerConfigModal({
     password: '',
     path: '/'
   })
-
   const [showAdvanced, setShowAdvanced] = useState(false)
 
   const handleSubmit = () => {
@@ -49,10 +49,21 @@ export default function ServerConfigModal({
   return (
     <div className="modal-mask">
       <div className="modal-container">
-        <h3>远程sftp服务器配置</h3>
+        <div className="modal-header">
+          <h3>
+            <FiServer className="modal-icon" />
+            远程sftp服务器配置
+          </h3>
+          <button className="modal-close-btn" onClick={onCancel}>
+            <FiX />
+          </button>
+        </div>
 
         <div className="form-group">
-          <label>主机地址*</label>
+          <label>
+            <FiServer className="input-icon" />
+            主机地址*
+          </label>
           <input
             value={form.host}
             onChange={e => setForm({ ...form, host: e.target.value })}
@@ -61,18 +72,25 @@ export default function ServerConfigModal({
         </div>
 
         <div className="form-group">
-          <label>端口</label>
+          <label>
+            <FiHash className="input-icon" />
+            端口
+          </label>
           <input
             type="number"
             min="1"
             max="65535"
             value={form.port}
             onChange={e => setForm({ ...form, port: Number(e.target.value) })}
+            placeholder="22"
           />
         </div>
 
         <div className="form-group">
-          <label>用户名*</label>
+          <label>
+            <FiUser className="input-icon" />
+            用户名*
+          </label>
           <input
             value={form.username}
             onChange={e => setForm({ ...form, username: e.target.value })}
@@ -80,7 +98,10 @@ export default function ServerConfigModal({
         </div>
 
         <div className="form-group">
-          <label>密码*</label>
+          <label>
+            <FiLock className="input-icon" />
+            密码*
+          </label>
           <input
             type="password"
             value={form.password}

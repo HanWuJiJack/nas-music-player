@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef } from 'react';
+import { BsMusicNoteBeamed } from 'react-icons/bs';
 
 export default function LyricsDisplay({ lyrics, currentTime }) {
   const containerRef = useRef(null);
@@ -41,23 +42,33 @@ export default function LyricsDisplay({ lyrics, currentTime }) {
   }, [currentTime]);
 
   return (
-    <div className="lyrics-container" ref={containerRef}>
-      {parsedLyrics.map((line, index) => {
-        const isActive = currentTime >= line.time && 
-          (index === parsedLyrics.length - 1 || currentTime < parsedLyrics[index + 1].time);
-        return (
-          <div 
-            key={index}
-            ref={isActive ? activeRef : null}
-            className={`lyric-line ${isActive ? 'active' : ''}`}
-          >
-            {line.text}
+    <>
+      <div className="lyrics-header">
+        <BsMusicNoteBeamed className="lyrics-icon" />
+        <h3>歌词</h3>
+      </div>
+      <div className="lyrics-container" ref={containerRef}>
+        {parsedLyrics.length > 0 ? (
+          parsedLyrics.map((line, index) => {
+            const isActive = currentTime >= line.time && 
+              (index === parsedLyrics.length - 1 || currentTime < parsedLyrics[index + 1].time);
+            return (
+              <div 
+                key={index}
+                ref={isActive ? activeRef : null}
+                className={`lyric-line ${isActive ? 'active' : ''}`}
+              >
+                {line.text}
+              </div>
+            );
+          })
+        ) : (
+          <div className="lyric-placeholder">
+            <BsMusicNoteBeamed className="placeholder-icon" />
+            <p>{lyrics ? '正在解析歌词...' : '当前无歌词信息'}</p>
           </div>
-        );
-      })}
-      {
-        !parsedLyrics.length && <div className="lyric-line">歌词加载失败</div>
-      }
-    </div>
+        )}
+      </div>
+    </>
   );
 }
