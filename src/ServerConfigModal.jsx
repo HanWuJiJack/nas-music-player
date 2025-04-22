@@ -28,7 +28,6 @@ export default function ServerConfigModal({
     password: '',
     path: '/'
   })
-  const [showAdvanced, setShowAdvanced] = useState(false)
 
   const handleSubmit = () => {
     if (!form.host || !form.username) {
