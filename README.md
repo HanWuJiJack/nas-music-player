@@ -46,7 +46,7 @@ npm run package:win
 
 ## 界面预览
 
-![播放器界面](./image.png)
+![播放器界面](./public/image.png)
 
 ## 许可证
 MIT License
