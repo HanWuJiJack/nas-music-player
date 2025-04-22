@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { FilterNameFarmats } = require(path.join(__dirname, 'config'));
 
 class LocalFileHandler {
   static async listFiles(config) {
@@ -36,16 +37,11 @@ class LocalFileHandler {
     }
   }
 
-  static FilterNameFarmats = [
-    'wav',
-    'mp3',
-    'flac'
-  ]
   static FnFilterNameFarmats(name) {
     if (name.indexOf('.') > -1) {
       const arr = name.split('.')
       const type = arr[arr.length - 1]
-      return LocalFileHandler.FilterNameFarmats.includes(type)
+      return FilterNameFarmats.includes(type.toLowerCase())
     } else {
       return false
     }

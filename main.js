@@ -6,6 +6,8 @@ const {
 const Store = require('electron-store')
 const path = require('path')
 const axios = require('axios');
+const Client = require('ssh2-sftp-client')
+const LocalFileHandler = require(path.join(__dirname, 'src/LocalFileHandler'));
 
 const schema = {
   servers: {
@@ -66,7 +68,7 @@ function createWindow() {
   })
 
   if (process.env.NODE_ENV === 'development') {
-    win.loadURL('http://localhost:51730')
+    win.loadURL('http://localhost:51731')
     win.webContents.openDevTools()
   } else {
     // win.webContents.openDevTools()
@@ -74,8 +76,7 @@ function createWindow() {
   }
 }
 
-const Client = require('ssh2-sftp-client')
-const LocalFileHandler = require(path.join(__dirname, 'src/LocalFileHandler'));
+
 
 ipcMain.handle('get-file-stream', async (event, cfg) => {
   let sftp = null; // 将sftp声明提升到作用域顶部
@@ -83,16 +84,16 @@ ipcMain.handle('get-file-stream', async (event, cfg) => {
   if (!['local', 'remote'].includes(cfg.mode)) {
     throw new Error(`无效的文件模式: ${cfg.mode}`);
   }
-  
+
   // 清理可能的网络连接残留
-  if(cfg.mode === 'local' && sftp && sftp.client) {
+  if (cfg.mode === 'local' && sftp && sftp.client) {
     await sftp.end().catch(() => {});
   }
-  
+
   // console.log('文件模式验证通过:', cfg.mode);
   if (cfg.mode === 'local') {
     // 确保清理可能的残留连接
-    if(sftp && sftp.client) {
+    if (sftp && sftp.client) {
       await sftp.end().catch(() => {});
       sftp = null;
     }
@@ -208,7 +209,11 @@ ipcMain.handle('list-files', async (_, config) => {
       password: config.password,
     })
     const files = await sftp.list(config.path || '/')
-    return files
+    // console.log('SFTP文件列表处理:', files)
+    return files.filter(item => {
+      // console.log('item:', item)
+      return item && item.type !== 'e' && (item.type == 'd' || LocalFileHandler.FnFilterNameFarmats(item.name))
+    })
   } catch (error) {
     console.error('SFTP连接详细错误:', error)
     throw new Error(`连接失败: ${error.message}`)
@@ -219,7 +224,7 @@ ipcMain.handle('list-files', async (_, config) => {
 
 // 本地文件列表处理
 ipcMain.handle('list-local-files', async (_, path) => {
-  console.log('正在尝试获取本地文件列表:list-local-files')
+  console.log('正在尝试获取本地文件列表:list-local-files', path)
   try {
     const files = await LocalFileHandler.listFiles({
       path
@@ -284,7 +289,7 @@ process.on('uncaughtException', (error) => {
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  console.error('Unhandled Rejection at:999999999',);
+  console.error('Unhandled Rejection at:999999999', );
 });
 
 
@@ -300,12 +305,20 @@ ipcMain.handle('get-lyrics', async (_, songName) => {
     });
 
     const song = response.data.result.songs[0];
-    if (!song) return { lrc: { lyric: '// 该歌曲暂无歌词' } };
+    if (!song) return {
+      lrc: {
+        lyric: '// 该歌曲暂无歌词'
+      }
+    };
 
     const lyricResponse = await axios.get(`https://music.163.com/api/song/lyric?id=${song.id}&lv=1`);
     return lyricResponse.data;
   } catch (error) {
     console.error('歌词获取失败:', error);
-    return { lrc: { lyric: '// 歌词加载失败' } };
+    return {
+      lrc: {
+        lyric: '// 歌词加载失败'
+      }
+    };
   }
 });

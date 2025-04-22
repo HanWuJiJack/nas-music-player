@@ -1,10 +1,16 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import './App.css'
 import ServerConfigModal from './ServerConfigModal'
 import SFTPClient from './SFTPClient'
 import React from 'react'
-import { FiFolder, FiFile, FiChevronRight } from 'react-icons/fi'
+import { FiFolder, FiFile, FiMusic, FiSearch, FiServer, FiHome } from 'react-icons/fi'
+import { BsMusicNoteBeamed, BsPlayFill, BsPauseFill, BsSkipBackwardFill, BsSkipForwardFill } from 'react-icons/bs'
+import { IoMdRepeat, IoMdShuffle, IoMdInfinite } from 'react-icons/io'
+import { BiSolidVolumeFull, BiSolidVolumeMute } from 'react-icons/bi'
 import LyricsDisplay from './LyricsDisplay'
+
+// 歌词缓存，避免重复请求相同歌词
+const lyricsCache = {};
 
 export default function App() {
   const [currentTrack, setCurrentTrack] = useState('')
@@ -15,7 +21,7 @@ export default function App() {
   const [config, setConfig] = useState({})
   const [isLocalMode, setIsLocalMode] = useState(false)
   const [isPlaying, setIsPlaying] = useState(false);
-  const [audioElement, setAudioElement] = useState(null);
+  const audioRef = useRef(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [metaOr, setMetaOr] = useState({});
   const [lyrics, setLyrics] = useState('');
@@ -23,71 +29,116 @@ export default function App() {
   const [volume, setVolume] = useState(1);
   const [searchQuery, setSearchQuery] = useState('');
   const [playbackMode, setPlaybackMode] = useState('sequential');
+  const [isDragging, setIsDragging] = useState(false);
+
+  // Refs to track latest state values for use in closures
   const playbackModeRef = useRef(playbackMode);
   const currentTrackindexRef = useRef(currentTrackindex);
-  const debounceTimer = useRef(null);
-  const debounceTimerLoad = useRef(null);
+  const currentTrackRef = useRef(currentTrack);
+  const isPlayingRef = useRef(isPlaying);
+  const volumeRef = useRef(volume);
+  const serverFilesRef = useRef(serverFiles);
+  const currentPathRef = useRef(currentPath);
+  const isLocalModeRef = useRef(isLocalMode);
+  const configRef = useRef(config);
   const latestFile = useRef(null);
-  const latestIndex = useRef(null);
-
+  const latestIndex = useRef(-1);
+  const debounceTimerLoad = useRef(null);
+  const debounceTimer = useRef(null);
+  const isConnectedRef = useRef(isConnected);
+  // Keep refs in sync with state
   useEffect(() => {
     playbackModeRef.current = playbackMode;
     currentTrackindexRef.current = currentTrackindex;
-  }, [playbackMode, currentTrackindex]);
+    currentTrackRef.current = currentTrack;
+    isPlayingRef.current = isPlaying;
+    volumeRef.current = volume;
+    serverFilesRef.current = serverFiles;
+    currentPathRef.current = currentPath;
+    isLocalModeRef.current = isLocalMode;
+    configRef.current = config;
+    // 控制音量
+    if (audioRef.current) {
+      audioRef.current.volume = volumeRef.current;
+    }
+    isConnectedRef.current = isConnected;
+  }, [playbackMode, currentTrackindex, currentTrack, isPlaying, volume, serverFiles, currentPath, isLocalMode, config, isConnected]);
 
   const handlePlayPause = () => {
-    if (audioElement) {
-      if (isPlaying) {
-        audioElement.pause();
+    if (audioRef.current) {
+      if (isPlayingRef.current) {
+        audioRef.current.pause();
       } else {
-        audioElement.play();
+        audioRef.current.play();
       }
-      setIsPlaying(!isPlaying);
+      setIsPlaying(!isPlayingRef.current);
     }
   };
 
   const handleNextTrack = async () => {
+    if (serverFilesRef.current.length === 0) {
+      return;
+    }
     let index;
     index = currentTrackindexRef.current + 1;
-    // console.log('index1', index, currentTrackindexRef.current)
-    if (index === serverFiles.length) {
+    if (index === serverFilesRef.current.length) {
       index = 0;
     }
-    // console.log('index2', index)
-    const file = serverFiles[index];
+    const file = serverFilesRef.current[index];
     setCurrentTrackindex(index);
     await handlePlayFile(file, index);
   };
 
   const handlePrevTrack = async () => {
+    if (serverFilesRef.current.length === 0) {
+      return;
+    }
     let index = currentTrackindexRef.current - 1
     if (index == -1) {
-      index = serverFiles.length - 1;
+      index = serverFilesRef.current.length - 1;
     }
-    const file = serverFiles[index];
+    const file = serverFilesRef.current[index];
     setCurrentTrackindex(index);
     await handlePlayFile(file, index);
   };
 
   useEffect(() => {
-    let interval;
-    if (isPlaying && audioElement) {
-      interval = setInterval(() => {
-        setCurrentTime(audioElement.currentTime);
-      }, 1000);
+    let animationFrameId;
+
+    const updatePlayTime = () => {
+      if (isPlayingRef.current && audioRef.current) {
+        if (Math.abs(currentTime - audioRef.current.currentTime) > 0.1) {
+          setCurrentTime(audioRef.current.currentTime);
+        }
+        animationFrameId = requestAnimationFrame(updatePlayTime);
+      }
+    };
+
+    if (isPlayingRef.current && audioRef.current) {
+      animationFrameId = requestAnimationFrame(updatePlayTime);
     }
-    return () => clearInterval(interval);
-  }, [isPlaying, audioElement]);
+
+    return () => {
+      if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+      }
+    };
+  }, [isPlayingRef.current, currentTime]);
 
   const loadFile = async (file, mode) => {
     try {
-      const pathSeparator = currentPath.endsWith('/') ? '' : '/';
+      // 检查是否已经在播放同一文件，避免重复加载
+      if (currentTrackRef.current === file.name && isPlayingRef.current) {
+        return;
+      }
+
+      const pathSeparator = currentPathRef.current.endsWith('/') ? '' : '/';
       const filePath = mode === 'local'
-        ? `${currentPath}${pathSeparator}${file.name}`
-        : `${currentPath}${file.name}`;
-      // console.log('filePath', filePath)
+        ? `${currentPathRef.current}${pathSeparator}${file.name}`
+        : `${currentPathRef.current}${file.name}`;
+
       const { data, size, modified } = await window.electronAPI.file.getStream({
-        serverId: config.id,
+        serverId: configRef.current.id,
         path: filePath,
         mode: mode
       });
@@ -105,94 +156,119 @@ export default function App() {
   const newAudioAddEventListenerLoadeddata = () => {
     setCurrentTrackindex(latestIndex.current);
     debounceTimerLoad.current = null;
-    // setCurrentTrack(`${file.name}`);
-    // console.log('newAudioAddEventListenerLoadeddata')
   }
   const newAudioAddEventListenerEnded = () => {
+    console.log('newAudioAddEventListenerEnded');
     setIsPlaying(false);
     const currentMode = playbackModeRef.current;
-    // console.log('currentMode', currentMode)
     if (currentMode === 'sequential') {
-      // console.log('sequential')
-      return handleNextTrack();
+      handleNextTrack();
+      return;
     }
     if (currentMode === 'random') {
-      // console.log('random')
-      const index = Math.floor(Math.random() * serverFiles.length);
-      const file = serverFiles[index];
-      return handlePlayFile(file, index);
+      const index = Math.floor(Math.random() * serverFilesRef.current.length);
+      console.log('随机播放:', index,);
+      const file = serverFilesRef.current[index];
+      console.log('随机播放file:', file,);
+      handlePlayFile(file, index);
+      return;
     }
     if (currentMode === 'single') {
-      // console.log('single')
-      newAudio.currentTime = 0;
-      setCurrentTime(0);
-      newAudio.play();
-      setIsPlaying(true);
+      if (audioRef.current) {
+        audioRef.current.currentTime = 0;
+        setCurrentTime(0);
+        audioRef.current.play();
+        setIsPlaying(true);
+      }
       return;
     }
   }
   const initializeAudio = (blob, file) => {
     const audioUrl = URL.createObjectURL(blob);
-    let newAudio = null;
-    if (audioElement) {
-      newAudio = audioElement;
-      newAudio.pause();
-      newAudio.currentTime = 0;
-      URL.revokeObjectURL(newAudio.src);
-      newAudio.src = audioUrl;
-      newAudio.removeEventListener('loadeddata', newAudioAddEventListenerLoadeddata);
-      newAudio.removeEventListener('ended', newAudioAddEventListenerEnded);
+
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+
+      if (audioRef.current.src && audioRef.current.src.startsWith('blob:')) {
+        URL.revokeObjectURL(audioRef.current.src);
+      }
+
+      audioRef.current.removeEventListener('loadeddata', newAudioAddEventListenerLoadeddata);
+      
+      console.log('移除事件监听1');
+      audioRef.current.removeEventListener('ended', newAudioAddEventListenerEnded);
+      console.log('移除事件监听2');
+      audioRef.current.src = audioUrl;
     } else {
-      newAudio = new Audio(audioUrl);
+      audioRef.current = new Audio(audioUrl);
     }
-    setAudioElement(newAudio);
+
     setCurrentTrack(file.name);
-    newAudio.play();
+
+    audioRef.current.addEventListener('loadeddata', newAudioAddEventListenerLoadeddata);
+    audioRef.current.addEventListener('ended', newAudioAddEventListenerEnded);
+
+    audioRef.current.play();
     setIsPlaying(true);
-    newAudio.addEventListener('loadeddata', newAudioAddEventListenerLoadeddata);
-    newAudio.addEventListener('ended', newAudioAddEventListenerEnded);
+
+    if (audioRef.current) {
+      audioRef.current.volume = volumeRef.current;
+    }
+
     if (debounceTimer.current) {
       clearTimeout(debounceTimer.current);
     }
-    // 从网易云音乐API获取歌词
+
     debounceTimer.current = setTimeout(() => {
       const songName = file.name.replace(/\.[^/.]+$/, '');
+
+      if (lyricsCache[songName]) {
+        setLyrics(lyricsCache[songName]);
+        debounceTimer.current = null;
+        return;
+      }
+
       window.electronAPI.getLyrics(songName).then((searchRes) => {
         if (searchRes?.lrc?.lyric) {
-          // console.log('searchRes.lrc.lyric', searchRes.lrc.lyric)
+          lyricsCache[songName] = searchRes.lrc.lyric;
           setLyrics(searchRes.lrc.lyric);
         } else {
+          lyricsCache[songName] = '// 该歌曲暂无歌词';
           setLyrics('// 该歌曲暂无歌词');
         }
       }).catch((error) => {
         console.error('歌词获取失败:', error);
+        lyricsCache[songName] = '// 歌词加载失败';
         setLyrics('// 歌词加载失败');
       }).finally(() => {
         debounceTimer.current = null;
       });
     }, 300);
-
   }
 
   const handlePlayFile = (file, index) => {
-    console.log('handlePlayFile1', index)
+    // 避免多次点击同一首歌重复加载
+    if (currentTrackRef.current === file.name && isPlayingRef.current) {
+      return;
+    }
+
     latestFile.current = file;
     latestIndex.current = index;
 
     if (debounceTimerLoad.current) {
       clearTimeout(debounceTimerLoad.current);
     }
+    // 缩短延迟时间以提高响应速度
     debounceTimerLoad.current = setTimeout(() => {
-      loadFile(latestFile.current, isLocalMode ? 'local' : 'remote')
-    }, 1000);
-
+      loadFile(latestFile.current, isLocalModeRef.current ? 'local' : 'remote')
+    }, 300);
   };
 
   const handleRemoteConnect = async (config) => {
     try {
       await SFTPClient.connect(config)
-      const files = await SFTPClient.listFiles({ ...config, path: currentPath })
-      // console.log('远程服务器文件列表:', files)
+      const files = await SFTPClient.listFiles({ ...config, path: currentPathRef.current })
       setServerFiles(files)
       setIsConnected(true)
     } catch (error) {
@@ -204,54 +280,62 @@ export default function App() {
   }
 
   const handleLocalConnect = async () => {
-    // console.log('本地连接')
     const localPath = await window.electronAPI.local.chooseDirectory()
     setCurrentPath(localPath)
-    await getLocalListFiles()
+    await getLocalListFiles(localPath)
   }
 
-  const getLocalListFiles = async () => {
-    // console.log('本地连接getLocalListFiles')
+  const getLocalListFiles = async (path) => {
+    console.log('getLocalListFiles', path)
     try {
-      const files = await window.electronAPI.local.listFiles(currentPath)
-      // console.log('本地文件列表:', files)
+      const files = await window.electronAPI.local.listFiles(path)
+      console.log('files', files)
       setServerFiles(files)
-      // setIsConnected(true)
     } catch (error) {
       console.error('本地连接失败:', error)
       alert(`本地连接失败: ${error.message}`)
-      // setIsConnected(false)
     }
   }
 
-  useEffect(() => {
-    // console.log('isLocalMode', isLocalMode)
-    if (config.id && !isLocalMode) {
-      setConfig({ ...config, path: currentPath })
-      handleRemoteConnect(config)
+  const getFileListName = (path) => {
+    // 远程模式下，有配置ID且路径发生变化时，重新连接
+    if (!isLocalModeRef.current && isConnectedRef.current) {
+      console.log("handleRemoteConnect")
+      setConfig({ ...configRef.current, path: path });
+      handleRemoteConnect(configRef.current);
     }
-    if (isLocalMode) {
-      getLocalListFiles()
+    // 本地模式下，且已经选择了路径（不是默认路径），列出本地文件
+    else if (isLocalModeRef.current) {
+      console.log("getLocalListFiles")
+      getLocalListFiles(path);
     }
-  }, [currentPath])
-
-  const handleDisconnect = async () => {
-    // console.log('断开连接')
-    try {
-      await SFTPClient.disconnect()
-      setIsConnected(false)
-      setServerFiles([])
-      setCurrentPath('/')
-    } catch (error) {
-      console.error('断开连接失败:', error)
-      alert(`断开连接失败: ${error.message}`)
+  }
+  const handleDisconnect = async (tag = 2) => {
+    console.log('handleDisconnect', tag)
+    setIsConnected(false)
+    setServerFiles([])
+    setCurrentPath('/')
+    if (tag === 1) {
+      setIsLocalMode(false);
+    }
+    if (tag === 2) {
+      setIsLocalMode(true);
+      if (isConnectedRef.current) {
+        try {
+          await SFTPClient.disconnect()
+        } catch (error) {
+          console.error('断开连接失败:', error)
+          alert(`断开连接失败: ${error.message}`)
+        }
+      }
     }
   }
 
   const handleOpenFolder = async (folderName) => {
-    const pathSeparator = currentPath.endsWith('/') ? '' : '/';
-    const newPath = `${currentPath}${pathSeparator}${folderName}/`
+    const pathSeparator = currentPathRef.current.endsWith('/') ? '' : '/';
+    const newPath = `${currentPathRef.current}${pathSeparator}${folderName}/`
     setCurrentPath(newPath)
+    getFileListName(newPath)
   }
 
   const handleSaveConfig = (config) => {
@@ -259,18 +343,17 @@ export default function App() {
     setConfig(config)
     setShowConfigModal(false)
   }
-  const [isDragging, setIsDragging] = useState(false);
 
   const handleProgressClick = (e) => {
+    if (!audioRef.current || !metaOr?.duration) return;
+
     const rect = e.currentTarget.getBoundingClientRect();
     const width = rect.width;
     const offsetX = e.clientX - rect.left;
-    const newTime = (offsetX / width) * (metaOr?.duration || 1);
+    const newTime = Math.max(0, Math.min((offsetX / width) * metaOr.duration, metaOr.duration));
 
+    audioRef.current.currentTime = newTime;
     setCurrentTime(newTime);
-    if (audioElement) {
-      audioElement.currentTime = newTime;
-    }
   };
 
   const handleMouseDown = () => {
@@ -285,46 +368,121 @@ export default function App() {
 
   useEffect(() => {
     const handleMouseMove = (e) => {
-      if (isDragging && audioElement) {
+      if (isDragging && audioRef.current && metaOr?.duration) {
         const rect = document.querySelector('.progress-bar').getBoundingClientRect();
         const width = rect.width;
-        const offsetX = e.clientX - rect.left;
+        const offsetX = Math.max(0, Math.min(e.clientX - rect.left, width));
         const newTime = Math.max(0, Math.min((offsetX / width) * metaOr.duration, metaOr.duration));
 
+        audioRef.current.currentTime = newTime;
         setCurrentTime(newTime);
-        audioElement.currentTime = newTime;
       }
     };
 
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
+    if (isDragging) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+    }
+
     return () => {
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
     };
   }, [isDragging, metaOr?.duration]);
+
+  useEffect(() => {
+    const handleTimeUpdate = () => {
+      if (audioRef.current && !isDragging) {
+        setCurrentTime(audioRef.current.currentTime);
+      }
+    };
+
+    if (audioRef.current) {
+      audioRef.current.addEventListener('timeupdate', handleTimeUpdate);
+    }
+
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.removeEventListener('timeupdate', handleTimeUpdate);
+      }
+    };
+  }, [isDragging]);
+
+  useEffect(() => {
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.removeEventListener('loadeddata', newAudioAddEventListenerLoadeddata);
+        audioRef.current.removeEventListener('ended', newAudioAddEventListenerEnded);
+        audioRef.current.src = '';
+        audioRef.current = null;
+
+        if (debounceTimer.current) {
+          clearTimeout(debounceTimer.current);
+          debounceTimer.current = null;
+        }
+        if (debounceTimerLoad.current) {
+          clearTimeout(debounceTimerLoad.current);
+          debounceTimerLoad.current = null;
+        }
+      }
+    };
+  }, []);
+
+  const preloadNextFile = (currentIndex) => {
+    if (playbackModeRef.current !== 'sequential' || !serverFilesRef.current.length) return;
+
+    const nextIndex = (currentIndex + 1) % serverFilesRef.current.length;
+    const nextFile = serverFilesRef.current[nextIndex];
+
+    if (nextFile && nextFile.type !== 'd') {
+      setTimeout(() => {
+        const songName = nextFile.name.replace(/\.[^/.]+$/, '');
+        if (!lyricsCache[songName]) {
+          window.electronAPI.getLyrics(songName).then((searchRes) => {
+            if (searchRes?.lrc?.lyric) {
+              lyricsCache[songName] = searchRes.lrc.lyric;
+            }
+          }).catch(() => {
+            // 预加载错误可以安静处理
+          });
+        }
+      }, 1000);
+    }
+  };
+
+  useEffect(() => {
+    if (currentTrackindex >= 0) {
+      preloadNextFile(currentTrackindex);
+    }
+  }, [currentTrackindex, serverFilesRef.current, playbackModeRef.current]);
+
   return (
     <React.Fragment>
       <div className="container">
         <div className="top-navbar">
           <div className="nav-content">
+            <div className="app-title">
+              <FiMusic className="app-icon" />
+              <h1>Music Player</h1>
+            </div>
             <div className="mode-switch">
               <button
                 className={`mode-btn ${!isLocalMode ? 'active' : ''}`}
                 onClick={() => {
-                  setIsLocalMode(false);
-                  handleDisconnect()
+                  handleDisconnect(1)
                 }}
               >
+                <FiServer className="mode-icon" />
                 远程模式
               </button>
               <button
                 className={`mode-btn ${isLocalMode ? 'active' : ''}`}
                 onClick={() => {
-                  setIsLocalMode(true)
-                  handleDisconnect()
+                  handleDisconnect(2)
                 }}
               >
+                <FiHome className="mode-icon" />
                 本地模式
               </button>
             </div>
@@ -336,14 +494,14 @@ export default function App() {
             </button>
             {isConnected && (
               <div className="server-status">
-                <span>已连接：{config.host}</span>
-                <span>当前路径：{currentPath}</span>
+                <span><FiServer className="status-icon" /> {config.host}</span>
+                <span><FiFolder className="status-icon" /> {currentPath}</span>
               </div>
             )}
             {
               isLocalMode && (
                 <div className="server-status">
-                  <span>当前路径：{currentPath}</span>
+                  <span><FiFolder className="status-icon" /> {currentPath}</span>
                 </div>
               )
             }
@@ -353,6 +511,7 @@ export default function App() {
           <div className="main-content-left">
             <div className="search-container">
               <div className="search-box">
+                <FiSearch className="search-icon" />
                 <input
                   type="text"
                   placeholder="搜索歌曲名称..."
@@ -362,7 +521,6 @@ export default function App() {
               </div>
             </div>
             <div className="file-list">
-
               {serverFiles
                 .map((file, index) => (
                   (file.type === 'd' || file.name.toLowerCase().includes(searchQuery.toLowerCase())) &&
@@ -374,29 +532,33 @@ export default function App() {
                     {file.type === 'd' ? (
                       <FiFolder className="file-icon" />
                     ) : (
-                      <FiFile className="file-icon" />
+                      <FiMusic className="file-icon" />
                     )}
                     <span>{file.name}</span>
                     {file.type !== 'd' && (
                       <button
                         className="play-btn"
                         onClick={async () => {
-                          // setCurrentTrackindex(index);
                           await handlePlayFile(file, index)
                         }}
                       >
-                        {isPlaying && currentTrackindex === index ? '⏸' : '▶'}
+                        {isPlaying && currentTrackindex === index ? <BsPauseFill /> : <BsPlayFill />}
                       </button>
                     )}
                   </div>
                 ))}
-
             </div>
 
             <div className="player-controls">
               <div className="track-info">
-                <span style={{ marginRight: 10, fontSize: 25, fontWeight: 600 }}>{currentTrack || '未选择曲目'}</span>
-                <span style={{ fontSize: 12, color: "#ccc" }}> ({Math.round(currentTime)}/{Math.round(metaOr?.duration || 0)}s)</span>
+                <div className="track-title">
+                  <BsMusicNoteBeamed className="track-icon" />
+                  <span>{currentTrack || '未选择曲目'}</span>
+                </div>
+                <span className="track-time">
+                  {Math.floor(currentTime / 60)}:{String(Math.floor(currentTime % 60)).padStart(2, '0')} /
+                  {Math.floor((metaOr?.duration || 0) / 60)}:{String(Math.floor((metaOr?.duration || 0) % 60)).padStart(2, '0')}
+                </span>
                 <div
                   className="progress-bar"
                   onClick={handleProgressClick}
@@ -406,44 +568,46 @@ export default function App() {
                   <div
                     className="progress"
                     style={{
-                      width: `${(currentTime / (metaOr?.duration || 1)) * 100}%`,
-                      transition: isDragging ? 'none' : 'width 0.3s'
+                      width: `${((currentTime || 0) / (metaOr?.duration || 1)) * 100}%`,
+                      transition: isDragging ? 'none' : 'width 0.1s linear'
                     }}
                   />
                 </div>
               </div>
               <div className="control-buttons">
                 <div className="button-group">
-                  <button onClick={handlePrevTrack}>⏮</button>
-                  <button onClick={handlePlayPause}>{isPlaying ? '⏸' : '▶'}</button>
-                  <button onClick={handleNextTrack}>⏭</button>
+                  <button onClick={handlePrevTrack}><BsSkipBackwardFill /></button>
+                  <button onClick={handlePlayPause} className="play-pause-btn">
+                    {isPlaying ? <BsPauseFill /> : <BsPlayFill />}
+                  </button>
+                  <button onClick={handleNextTrack}><BsSkipForwardFill /></button>
                 </div>
                 <div className="mode-buttons">
                   <button
                     className={playbackMode === 'single' ? 'active' : ''}
-                    onClick={() => setPlaybackMode('single')}>
-                    ↻
+                    onClick={() => setPlaybackMode('single')}
+                    title="单曲循环"
+                  >
+                    <IoMdRepeat />
                   </button>
                   <button
                     className={playbackMode === 'random' ? 'active' : ''}
-                    onClick={() => setPlaybackMode('random')}>
-                    ∞
+                    onClick={() => setPlaybackMode('random')}
+                    title="随机播放"
+                  >
+                    <IoMdShuffle />
                   </button>
                   <button
                     className={playbackMode === 'sequential' ? 'active' : ''}
-                    onClick={() => setPlaybackMode('sequential')}>
-                    ⇄
+                    onClick={() => setPlaybackMode('sequential')}
+                    title="顺序播放"
+                  >
+                    <IoMdInfinite />
                   </button>
                 </div>
                 <div className="volume-controls">
-                  <button
-                    onClick={() => {
-                      const newVolume = volume > 0 ? 0 : 1;
-                      setVolume(newVolume);
-                      if (audioElement) audioElement.volume = newVolume;
-                    }}
-                  >
-                    {volume > 0 ? '🔊' : '🔇'}
+                  <button>
+                    {volume > 0 ? <BiSolidVolumeFull /> : <BiSolidVolumeMute />}
                   </button>
                   <input
                     type="range"
@@ -454,7 +618,6 @@ export default function App() {
                     onChange={(e) => {
                       const newVolume = parseFloat(e.target.value);
                       setVolume(newVolume);
-                      if (audioElement) audioElement.volume = newVolume;
                     }}
                   />
                 </div>
